@@ -2,6 +2,335 @@
 
 Простое FastAPI-приложение, которое используется как основа для лабораторной работы по Docker.
 
+# Лабораторная работа № 3 — Персистентность и изоляция контейнеров
+
+## Индивидуальные параметры
+
+| Параметр | Значение |
+|---|---|
+| Номер ИСУ | `466519` |
+| Префикс контейнеров | `lishchuk` |
+| Порт приложения | `8019` |
+| Порт PostgreSQL | `5449` |
+| Секретный ключ приложения | `secret19lishchuk` |
+| Имя базы данных | `lishchuk19` |
+
+## 1. Подготовка PostgreSQL и приложения
+
+Для начала создадим именованный Docker volume. 
+
+```bash
+docker volume create lishchuk-pgdata
+
+docker volume inspect lishchuk-pgdata
+```
+
+Запустим PostgreSQL с подключённым хранилищем:
+
+```bash
+docker run -d \
+  --name lishchuk-postgres \
+  -e POSTGRES_USER=user_19 \
+  -e POSTGRES_PASSWORD=pgpass_19 \
+  -e POSTGRES_DB=assistant_19\
+  -v lishchuk-pgdata:/var/lib/postgresql/data \
+  -p 5449:5432 \
+  postgres:15
+```
+
+Проверим, что контейнер запущен:
+
+```bash
+docker ps --filter "name=lishchuk-postgres" \
+  --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+```
+
+Теперь соберём образ приложения:
+
+```bash
+docker build -t lishchuk-assistant:v3 .
+```
+
+Посмотрим, появился ли образ в локальном хранилище Docker:
+
+```bash
+docker images | grep lishchuk-assistant
+```
+
+Запустим приложение. На этом этапе подключение к базе выполняется через `host.docker.internal`, который позволяет контейнеру обратиться к хостовой машине.
+
+```bash
+docker run -d \
+  --name lishchuk-assistant \
+  --add-host=host.docker.internal:host-gateway \
+  -p 8019:8019 \
+  -e APP_OWNER=lishchuk \
+  -e APP_SECRET=<blank> \
+  -e DATABASE_URL="postgresql://<blank>:<blank>@host.docker.internal:5449/<blank>" \
+  lishchuk-assistant:v3
+```
+
+Проверим состояние контейнера:
+
+```bash
+docker ps --filter "name=lishchuk-assistant" \
+  --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+```
+
+### Проверка API
+
+Получим ответ главной страницы:
+
+```bash
+curl http://localhost:8019/
+echo
+```
+
+Проверим состояние подключения к базе данных:
+
+```bash
+curl http://localhost:8019/health
+echo
+```
+
+Создадим тестовую заметку:
+
+```bash
+curl -X POST http://localhost:8019/notes \
+  -H "Content-Type: application/json" \
+  -d '{"text": "ЛР3: проверка сохранения данных"}'
+echo
+```
+
+Получим список заметок:
+
+```bash
+curl http://localhost:8019/notes
+echo
+```
+
+## 2. Проверка сохранности данных
+
+Проверим, сохраняются ли записи после удаления контейнера приложения.
+
+Остановим и удалим контейнер assistant:
+
+```bash
+docker stop lishchuk-assistant
+docker rm lishchuk-assistant
+```
+
+
+```bash
+docker run -d \
+  --name lishchuk-assistant \
+  --add-host=host.docker.internal:host-gateway \
+  -p 8019:8019 \
+  -e APP_OWNER=lishchuk \
+  -e APP_SECRET=secret19lishchuk \
+  -e DATABASE_URL="postgresql://user_19:pgpass_19@host.docker.internal:5449/assistant_19" \
+  lishchuk-assistant:v3
+```
+
+Убедимся, что приложение запущено:
+
+```bash
+docker ps --filter "name=lishchuk" \
+  --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+```
+
+Запросим ранее созданные заметки:
+
+```bash
+curl http://localhost:8019/notes
+echo
+```
+
+Сформируем артефакт для фиксации результата:
+
+```bash
+echo "========================================" && \
+echo "Тест персистентности: $(date '+%H:%M:%S')" && \
+echo "$(whoami)@$(hostname)" && \
+echo "========================================" && \
+curl -s http://localhost:8019/notes | python3 -m json.tool
+```
+
+## 3. Подключение конфигурации через bind mount
+
+
+Посмотрим текущую конфигурацию:
+
+```bash
+cat config/app.conf
+```
+
+Остановим прежний контейнер приложения:
+
+```bash
+docker stop lishchuk-assistant
+docker rm lishchuk-assistant
+```
+
+Создадим новый контейнер с подключённым каталогом `config`:
+
+```bash
+docker run -d \
+  --name lishchuk-assistant-config \
+  --add-host=host.docker.internal:host-gateway \
+  -p 8019:8019 \
+  -e APP_OWNER=lishchuk \
+  -e APP_SECRET=secret19lishchuk \
+  -e DATABASE_URL="postgresql://user_19:pgpass_19@host.docker.internal:5449/assistant_19" \
+  -v "$(pwd)/config:/app/config:ro" \
+  lishchuk-assistant:v3
+```
+
+Параметр `:ro` запрещает контейнеру изменять файлы подключённого каталога.
+
+Проверим состояние контейнера:
+
+```bash
+docker ps --filter "name=lishchuk-assistant-config"
+```
+
+Посмотрим конфигурационный файл изнутри контейнера:
+
+```bash
+docker exec -it lishchuk-assistant-config sh
+```
+
+Внутри контейнера выполним:
+
+```bash
+cat /app/config/app.conf
+```
+
+Для выхода из оболочки:
+
+```bash
+exit
+```
+
+## 4. Изоляция контейнеров с помощью пользовательской сети
+
+Создадим сеть:
+
+```bash
+docker network create lishchuk-backend
+```
+
+Проверим её наличие:
+
+```bash
+docker network ls --filter "name=lishchuk"
+```
+
+Удалим предыдущие контейнеры приложения и базы данных, если они ещё существуют:
+
+```bash
+docker stop lishchuk-assistant-config
+docker rm lishchuk-assistant-config
+
+docker stop lishchuk-postgres lishchuk-assistant
+docker rm lishchuk-postgres lishchuk-assistant
+```
+
+### Запуск PostgreSQL в пользовательской сети
+
+```bash
+docker run -d \
+  --name lishchuk-postgres \
+  --network lishchuk-backend \
+  -p 5449:5432 \
+  -e POSTGRES_USER=user_19 \
+  -e POSTGRES_PASSWORD=pgpass_19 \
+  -e POSTGRES_DB=assistant_19 \
+  -v lishchuk-pgdata:/var/lib/postgresql/data \
+  postgres:15
+```
+
+### Запуск приложения в той же сети
+
+```bash
+docker run -d \
+  --name lishchuk-assistant \
+  --network lishchuk-backend \
+  -p 8019:8019 \
+  -e APP_OWNER=lishchuk \
+  -e APP_SECRET=secret19lishchuk \
+  -e DATABASE_URL="postgresql://user_19:pgpass_19@host.docker.internal:5449/assistant_19"\
+  -v "$(pwd)/config:/app/config:ro" \
+  lishchuk-assistant:v3
+```
+
+
+Проверим, что оба контейнера работают:
+
+```bash
+docker ps --filter "name=lishchuk" \
+  --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+```
+
+Проверим API:
+
+```bash
+curl http://localhost:8019/health
+echo
+```
+
+Создадим новую заметку:
+
+```bash
+curl -X POST http://localhost:8019/notes \
+  -H "Content-Type: application/json" \
+  -d '{"text": "ЛР3: проверка пользовательской сети"}'
+echo
+```
+
+Получим список записей:
+
+```bash
+curl http://localhost:8019/notes
+echo
+```
+
+### Проверка сетевой изоляции
+
+Запустим временный контейнер Alpine вне пользовательской сети:
+
+```bash
+docker run -it --rm alpine:3.18 ping -c 2 lishchuk-postgres
+```
+
+Затем выполним аналогичную команду внутри пользовательской сети:
+
+```bash
+docker run -it --rm \
+  --network lishchuk-backend \
+  alpine:3.18 ping -c 2 lishchuk-postgres
+```
+
+В пользовательской сети Docker разрешает имя контейнера `lishchuk-postgres` через встроенный DNS. Вне этой сети такое имя обычно не разрешается.
+
+## 5. Финальный артефакт
+```bash
+echo "========================================" && \
+echo "ЛР3 завершена: $(date '+%d.%m.%Y %H:%M:%S')" && \
+echo "Студент: $(whoami)@$(hostname)" && \
+echo "========================================" && \
+echo "" && \
+echo "Контейнеры:" && \
+docker ps --filter "name=lishchuk-" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" && \
+echo "" && \
+echo "Volumes:" && \
+docker volume ls --filter "name=lishchuk-" && \
+echo "" && \
+echo "Сети:" && \
+docker network ls --filter "name=lishchuk-"
+```
+
+
 ## 📁 Структура проекта
 
 ```
