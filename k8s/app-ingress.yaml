@@ -1,0 +1,17 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: lishchuk-ingress
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: lishchuk.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: lishchuk-assistant
+                port:
+                  number: 8019

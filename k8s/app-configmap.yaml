@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lishchuk-app-config
+data:
+  APP_OWNER: "lishchuk"
+
+  POSTGRES_USER: "user_19"
+  POSTGRES_DB: "lishchuk19"
+  POSTGRES_HOST: "lishchuk-postgres"
+  POSTGRES_PORT: "5432"
+
+  REDIS_URL: "redis://lishchuk-redis:6379/0"
+  CACHE_TTL: "120"

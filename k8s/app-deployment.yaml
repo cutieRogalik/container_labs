@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lishchuk-assistant
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: lishchuk-assistant
+  template:
+    metadata:
+      labels:
+        app: lishchuk-assistant
+    spec:
+      containers:
+        - name: assistant
+          image: assist-py-app
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8019
+          envFrom:
+            - configMapRef:
+                name: lishchuk-app-config
+          env:
+            - name: APP_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: lishchuk-app-secret
+                  key: APP_SECRET
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: lishchuk-app-secret
+                  key: POSTGRES_PASSWORD
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8019
+            initialDelaySeconds: 5
+            periodSeconds: 10
+
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8019
+            initialDelaySeconds: 15
+            periodSeconds: 20
