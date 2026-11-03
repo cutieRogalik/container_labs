@@ -2,7 +2,7 @@
 
 Простое FastAPI-приложение, которое используется как основа для лабораторной работы по Docker.
 
-# Лабораторная работа № 3 — Персистентность и изоляция контейнеров
+# Лабораторная работа № 5 — Введение в Kubernetes: развёртывание приложения с PostgreSQL и Redis
 
 ## Индивидуальные параметры
 
@@ -11,6 +11,7 @@
 | Номер ИСУ | `466519` |
 | Префикс контейнеров | `lishchuk` |
 | Порт приложения | `8019` |
+| Порт Redis| `6389` |
 | Порт PostgreSQL | `5449` |
 | Секретный ключ приложения | `secret19lishchuk` |
 | Имя базы данных | `lishchuk19` |
@@ -313,23 +314,181 @@ docker run -it --rm \
 
 В пользовательской сети Docker разрешает имя контейнера `lishchuk-postgres` через встроенный DNS. Вне этой сети такое имя обычно не разрешается.
 
-## 5. Финальный артефакт
+## 5. Docker Compose
+
+### Архитектура приложения
+
+Для запуска приложения используется Docker Compose, который позволяет описать и запустить несколько связанных контейнеров с помощью конфигурационного YAML-файла.
+
+Стек состоит из трёх сервисов:
+
+- app - FastAPI-приложение, обрабатывающее HTTP-запросы и предоставляющее API для работы с заметками и получения погоды. Также приложение использует Redis для кеширования результатов запросов к API погоды.
+- PostgreSQL (`db`) - база данных, предназначенная для хранения заметок. Данные сохраняются в именованном Docker volume `lishchuk-pgdata`, поэтому они не пропадают при удалении контейнера базы данных.
+- Redis (`redis`) - хранилище данных в оперативной памяти, используемое для кеширования ответов API погоды. Это позволяет повторно использовать ранее полученные результаты и уменьшить количество внешних запросов.
+
+Все три сервиса подключены к пользовательской сети Docker `lishchuk-backend`. Благодаря встроенному DNS Docker Compose приложение может обращаться к базе данных по имени `db`, а к Redis - по имени `redis`, используя внутренние порты контейнеров.
+
+### Используемые порты
+
+| Сервис | Порт хоста | Внутренний порт контейнера | Назначение |
+|---|---:|---:|---|
+| FastAPI (`app`) | 8019 | 8019 | Доступ к API приложения |
+| PostgreSQL (`db`) | 5449 | 5432 | Подключение к базе данных с хоста |
+| Redis (`redis`) | 6389 | 6379 | Доступ к Redis с хоста |
+
+Внутри сети Docker сервисы взаимодействуют друг с другом по внутренним портам. Например, приложение подключается к PostgreSQL по адресу `db:5432`, а к Redis - по адресу `redis:6379`. Порты хоста используются для доступа к сервисам извне Docker-сети.
+
+### Запуск стека
+
+Для сборки образа приложения и запуска всех сервисов в фоновом режиме используется команда:
+
+```bash
+docker compose up -d --build
+```
+
+Для проверки состояния сервисов используется команда:
+
+```bash
+docker compose ps
+```
+
+Просмотреть логи приложения можно с помощью команды:
+
+```bash
+docker compose logs --tail=50 app
+```
+
+Проверить API и статистику кеширования можно запросами:
+
+```bash
+curl http://localhost:8019/weather/Moscow
+curl http://localhost:8019/cache/stats
+```
+
+Повторный запрос погоды позволяет проверить, используется ли кеширование. При корректной работе приложения результат может быть получен из Redis без повторного обращения к внешнему API.
+
+### Масштабирование приложения
+
+Docker Compose позволяет запустить несколько экземпляров одного сервиса. Это полезно для проверки работы приложения при распределении запросов между несколькими контейнерами.
+
+Для масштабирования используется отдельный файл `docker-compose.scale.yml`:
+
+```bash
+docker compose -f docker-compose.scale.yml up -d --build --scale app=3
+```
+
+Команда запускает три экземпляра сервиса `app`, сохраняя по одному экземпляру PostgreSQL и Redis. Все экземпляры приложения подключаются к общей сети и используют одно хранилище Redis, поэтому кеш доступен каждому экземпляру приложения.
+
+Для масштабирования в конфигурации приложения не должен быть задан фиксированный `container_name`: каждый экземпляр должен иметь собственное имя, назначенное Docker Compose.
+
+В конфигурации масштабирования публикация порта приложения задаётся без фиксированного порта хоста. Docker назначает доступные порты хоста автоматически, сохраняя внутренний порт приложения `8019`. Поэтому адреса опубликованных портов следует проверять командой:
+
+```bash
+docker compose -f docker-compose.scale.yml ps app
+```
+
+Для просмотра всех запущенных контейнеров используется:
+
+```bash
+docker ps
+```
+
+Таким образом, Docker Compose упрощает запуск и управление несколькими взаимосвязанными сервисами, а масштабирование позволяет проверить работу нескольких экземпляров приложения с общей базой данных и кешем.
+
+## Финальный артефакт
 ```bash
 echo "========================================" && \
-echo "ЛР3 завершена: $(date '+%d.%m.%Y %H:%M:%S')" && \
+echo "ЛР4 завершена: $(date '+%d.%m.%Y %H:%M:%S')" && \
 echo "Студент: $(whoami)@$(hostname)" && \
 echo "========================================" && \
 echo "" && \
-echo "Контейнеры:" && \
-docker ps --filter "name=lishchuk-" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" && \
-echo "" && \
-echo "Volumes:" && \
-docker volume ls --filter "name=lishchuk-" && \
+echo "Docker Compose сервисы:" && \
+docker compose ps && \
 echo "" && \
 echo "Сети:" && \
-docker network ls --filter "name=lishchuk-"
+docker network ls --filter "name=lishchuk" && \
+echo "" && \
+echo "Volumes:" && \
+docker volume ls --filter "name=lishchuk" && \
+echo "" && \
+echo "Кэш Redis:" && \
+docker exec lishchuk-redis redis-cli KEYS "weather:*" && \
+echo "" && \
+echo "Погода (из кэша):" && \
+curl -s http://localhost:8019/cache/stats | python3 -m json.tool
+
+```
+## Kubernetes
+
+Для запуска приложения в Minikube необходимо применить манифесты в следующем порядке:
+
+```bash
+# 1. Запуск Minikube
+minikube start
+
+# 2. Загрузка образа приложения
+minikube image load assist-py-app:latest
+
+# 3. Применение ConfigMap и Secret
+kubectl apply -f k8s/app-configmap.yaml
+kubectl apply -f k8s/app-secret.yaml
+
+# 4. Запуск PostgreSQL и Redis
+kubectl apply -f k8s/postgres-pvc.yaml
+kubectl apply -f k8s/postgres-deployment.yaml
+kubectl apply -f k8s/postgres-service.yaml
+kubectl apply -f k8s/redis-deployment.yaml
+kubectl apply -f k8s/redis-service.yaml
+
+# 5. Запуск приложения
+kubectl apply -f k8s/app-deployment.yaml
+kubectl apply -f k8s/app-service.yaml
+
+# 6. Проверка состояния
+kubectl get pods
+kubectl get services
+kubectl get all
 ```
 
+Все Pod должны находиться в состоянии `Running` и иметь статус готовности `1/1`. В выводе должны присутствовать настройки Readiness и Liveness, а состояние готовности Pod должно иметь значение Ready: True.
+
+Для проверки приложения получаем адрес сервиса:
+
+```bash
+minikube service lishchuk-assistant --url
+```
+
+Проверяем доступность приложения и его основные endpoints:
+
+```bash
+curl http://<адрес-сервиса>/
+curl http://<адрес-сервиса>/health
+curl http://<адрес-сервиса>/weather/<город>
+curl -X POST http://<адрес-сервиса>/notes \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Проверка сохранения заметок в Kubernetes"}'
+curl http://<адрес-сервиса>/notes
+```
+
+Для проверки Ingress:
+
+```bash
+minikube addons enable ingress
+kubectl apply -f k8s/app-ingress.yaml
+kubectl get ingress
+```
+Для доступа по доменному имени добавим IP-адрес Minikube в /etc/hosts:
+```bash
+echo "$(minikube ip) lishchuk.local" | sudo tee -a /etc/hosts
+```
+После этого приложение будет доступно по следующим адресам:
+```bash
+# Главная страница
+curl http://lishchuk.local/
+
+# Проверка состояния
+curl http://lishchuk.local/health
+```
 
 ## 📁 Структура проекта
 
@@ -489,6 +648,5 @@ docker run -d \
 1. `curl http://localhost:8000/` — должен вернуть приветствие с вашим именем
 2. `curl http://localhost:8000/me` — должен показать `secret_prefix` (первые 6 символов вашего ключа)
 3. `curl http://localhost:8000/secret/ваш_ключ` — должен вернуть `LAB2_SUCCESS_ВАШЕИМЯ`
-4. `curl http://localhost:8000/weather/London` — должен вернуть температуру, влажность, ветер
+4. `curl http://localhost:8000/weather/London`  должен вернуть температуру, влажность, ветер
 5. `docker inspect --format='{{.State.Health.Status}}' personal-assistant` — должен вернуть `healthy`
-
